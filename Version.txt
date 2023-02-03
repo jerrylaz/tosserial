@@ -1,0 +1,72 @@
+ver 0.5.2 24-6-2022
+- Added support for setting serial port params (Parity, Stopbits) on LINUX.
+- Added WriteHexStr(HexStr: String) which auto converts 'OF A1' to $OFA1 and write to com port
+
+ver 0.5.1 13-6-2022
+- Added function ReadBuf(var buf; BytesToRead: word; ATimeout: word): Integer which will block for a "ATimeout"
+  period until the needed number of bytes have been read.
+
+ver 0.5.0 3-6-2022
+- Known bug: SyncRead cannot be use for reading > 1040 bytes at one read.
+- Fixed a bug that will cause AVs when using the OnReceive event to receive strings as in below example.
+  
+  procedure TForm1.OSSerial1OnReceive(Sender: TObject);
+  var s: String;
+  begin
+    s := OSSerial1.ReadString;
+  end;
+
+- Optimize Com Receive Thread. Much faster now compare to previous version.
+- Now syncread() can work independently by itself to wait for com receive some data anywhere in the program.
+  example:
+          begin
+            do_something();
+            .
+            .
+            //need an input from the com port at this moment...
+            if OSSerial1.SyncRead(5000) then begin //5 secs timeout
+              s := OSSerial1.ReadString;
+              if s = 'OK' then begin
+                do_OK();
+                Exit;
+              end;
+            end else begin
+              WriteLn('Timeout');
+            end;
+            .
+            .
+            .
+            do_something_else;
+          end;
+
+
+ver0.4.2 14-4-2021
+- Fixed a bug which cannot receive a single byte data.
+
+ver0.4 6-11-2019
+-Supports changing COMMSTATE when comport is active.
+-Supports function SyncRead (blocking) and ASyncRead (non-blocking) to direct receive data back to program flow.usage example: 
+  		com.WriteString('some data');
+		if com.SyncRead then //you can specify timeout. default is 500.
+		  rxStr := com.ReadString;
+
+for lenghty operation example: 
+		com.WriteString('Get EEPROM dump');
+		While not com.AsyncRead(ReceivedBytes, HasTimeout) do begin
+		  WriteLn('Bytes rx: ' + IntToStr(ReceivedBytes));
+		end;
+		if HasTimeout then begin
+		  WriteLn('Operation has timeout');
+		end else begin
+		  EEpromDump := com.ReadString;
+		end;
+
+-Supports '\n' and '\r' C-String escape code for the function com.WriteString.
+ You need to enable by supplying an escape char to the function. You can specify any character to be the escape code.
+example: com.WriteString('Some\r\nstring', '\'); 
+	 
+	output: Some
+		string
+
+-
+
