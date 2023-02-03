@@ -21,7 +21,7 @@ uses
   Classes, SysUtils, LResources, Forms, StrUtils;
 
 const
-  ver = '0.5.1'; //13-6-2022 Windows
+  ver = '0.5.2'; //13-6-2022 Windows
 
 
 
