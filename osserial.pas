@@ -1,5 +1,5 @@
 {******************************************************************************}
-{  version: 0.5.2                                                              }
+{  version: 0.5.4                                                              }
 {  date: 20-6-2018                                                             }
 {  Type: Serial port component (OpenScada Library - TOSSerial)                 }
 {  Author: jerry_my@hotmail.com                                                }
@@ -21,25 +21,31 @@ uses
   Classes, SysUtils, LResources, Forms, StrUtils;
 
 const
-  ver = '0.5.2'; //13-6-2022 Windows
+  ver = '0.5.4'; //13-6-2022 Windows
 
 
 
 Type
   TCrcFunction = function (data: array of byte; Len: Integer): TBytes;
+  //TCrcFunctionEx = function (data: array of byte; StartIdx, Len: Integer): TBytes;
 
 operator + (a: TBytes; b: TBytes): TBytes; overload;
-function BytesToAsciiStr(dataBytes: array of byte; ALength: Integer): String;
+function BytesToAsciiStr(dataBytes: array of byte; ALength: Integer; Spacing: Boolean = False): String;
 function BytesToHexStr(dataBytes: array of byte; ALength: Integer;
                                  ByteSpacing: Boolean): String;
 function HexStrToBytes(hex: String): TBytes;
 function StrToBytes(s: String): TBytes;
+function InsertBetween(src, substr: String; Spacing: Integer; AtBegin, AtEnd: Boolean): String;
 function IEEE754ByteToFloat(b: array of byte): Single;
+{ StartPos is 1 for first byte }
+function SubBytes(srcBytes: array of byte; StartPos, Len: Integer): TBytes;
 //EnumerateComport taken from https://forum.lazarus.freepascal.org/index.php?topic=16616.0
 //by padiazg (windows).
 function EnumerateComport(ShowFriendlyName: Boolean): String;
 
 //==================== user editable functions ========================
+function CRC_LINBusClassic(data: array of byte; Len: Integer): TBytes;
+function CRC_LINBusEnhance(data: array of byte; Len: Integer): TBytes;
 function CRC16_Modbus(data: array of byte; Len: Integer): TBytes;
 function CRC16Swap_Modbus(data: array of byte; Len: Integer): TBytes;
 function CRCTesoo(data: array of byte; Len: Integer): TBytes;
@@ -99,6 +105,11 @@ type
   //  procedure Edit; override;
   //end;
 
+  { TFlowControl }
+
+
+
+
   { TSerialTimeouts }
 
 //      Totaltimeout = (Multiplier * No. of Bytes) + Constant
@@ -150,9 +161,22 @@ type
   private
     FEnded: Boolean;
     FOSSerial: TCustomOSSerial;
+    {$ifdef windows}
+    FQPFreq: int64; //query performance frequency
+    FInterval: int64;
+    FTick: int64;
+    FuSec: int64;
+    {$else}
     FInterval: cardinal;
     FTick: cardinal;
+    {$endif}
+    {$ifdef windows}
+    {Interval in microseconds}
+    procedure SetInterval(AValue: int64);
+    {$else}
+    {Interval in milliseconds}
     procedure SetInterval(AValue: cardinal);
+    {$endif}
   protected
     procedure Execute; override;
   public
@@ -162,7 +186,11 @@ type
     procedure Restart;
     procedure SendSignal;
     property Ended: Boolean read FEnded;
+    {$ifdef windows}
+    property Interval: int64 read FInterval write SetInterval;
+    {$else}
     property Interval: cardinal read FInterval write SetInterval;
+    {$endif}
   end;
 
   { TOSSerialThread }
@@ -231,6 +259,7 @@ type
     FTimeouts: TSerialTimeouts;
     FRxBuffer: TBytes;
     FRxLength: word;
+    FSkipOnReceive: Boolean;
 {$IFDEF WINDOWS}
     FOnCommState: TCommStateChange;
 {$ENDIF}
@@ -242,6 +271,7 @@ type
     function GetByteSize: byte;
     function GetNodeCount: Integer;
     function GetPortName: String;
+    function GetSyncReadStatus: Boolean;
     function ProtocolCount(s: String): Integer;
     function DecodeProtocol(var b: TBytes; protocol: String; var ProtocolData: TProtocolData): boolean; //complete decode return true
     function DoGetCommMask: dword;
@@ -297,6 +327,8 @@ type
     function ReadStr: String;
     { alias to ReadString }
     function ReadData: String;
+    { Read Hex and output as Hex string }
+    function ReadBufAsHexStr: String;
     function PeekBuf(out Buf): Integer;
 
     {$ifndef windows}
@@ -313,10 +345,13 @@ type
     procedure WriteData(S: String);
     { Write as Hex in string format without using TBytes.
       Format can be '00 OF A1 BD' or '000FA1BD' or '00 of a1 bd'
+      This function will append the checksum automatically if CRC_Function is provided
     }
-    procedure WriteHexStr(S: String);
+    function WriteStrAsHex(S: String): String;
     procedure ClearBuffer(RxBuffer, TxBuffer: Boolean);
-    { Blocking function till timeout or data receive will unblock }
+    { Blocking function till timeout or data receive will unblock
+      Return True if data received
+      Return False if Timeout }
     function SyncRead(Timeout: cardinal=500): Boolean; //blocking
 {$IFDEF WINDOWS}
     { Non-blocking function that will provide BytesRead info for lengthy operation such reading EEPROM dump
@@ -342,12 +377,17 @@ type
     function ChangeCOMSetting(Baudrate: dword; Databits: byte; Parity: TParityType; Stopbits: TStopbits): Boolean;
 {$ENDIF}
     procedure ResetCounters(Tx, Rx: Boolean);
+    {
+      CRC_Function works with WriteHexStr() function which will append the
+      calculated checksum to the end of the Hex string.
+    }
     property CRC_Function: TCrcFunction read FCRCFunc write FCRCFunc;
     property RxBufferCount: word read FRxLength;
     property RxBuffer: TBytes read FRxBuffer;
     property RxLength: word read FRxLength;
     property RxCounter: cardinal read FRxCounter;
     property TxCounter: cardinal read FTxCounter;
+    property SyncReadInProgress: Boolean read GetSyncReadStatus;
     //property DebugRx: TStringList read FDebugRx;
   published
     property Baudrate: dword read GetBaudRate write SetBaudrate default 9600;
@@ -452,14 +492,26 @@ begin
   Move(b[0], Result[Length(a)],Length(b));
 end;
 
-function BytesToAsciiStr(dataBytes: array of byte; ALength: Integer): String;
+function BytesToAsciiStr(dataBytes: array of byte; ALength: Integer; Spacing: Boolean): String;
 var i: Integer;
 begin
   Result := '';
   //for i := 0 to ALength-1 do begin
   for i := Low(dataBytes) to High(dataBytes) do begin
     Assert(dataBytes[i] = 0, 'Data is 0!');
-    Result := Result + Format('%s', [Chr(dataBytes[i])]);
+    if not Spacing then begin
+      if (dataBytes[i] < $20) or
+         ((dataBytes[i] >= $7F) and (dataBytes[i] < $A0)) then
+        Result := Result + Format('%s ', [Chr($2E)])
+      else
+        Result := Result + Format('%s', [Chr(dataBytes[i])]);
+    end else begin
+      if (dataBytes[i] < $20) or
+         ((dataBytes[i] >= $7F) and (dataBytes[i] < $A0)) then
+        Result := Result + Format(' %s ', [Chr($2E)])
+      else
+        Result := Result + Format(' %s ', [Chr(dataBytes[i])]);
+    end;
   end;
 end;
 
@@ -498,8 +550,29 @@ begin
   len := Length(s);
   SetLength(Result, len);
   for i := 1 to len do begin
-    Result[i-0] := Ord(s[i]);
+    Result[i-1] := Ord(s[i]);
   end;
+end;
+
+function InsertBetween(src, substr: String; Spacing: Integer; AtBegin,
+  AtEnd: Boolean): String;
+var i: Integer;
+begin
+//src = '1234567890AB'
+//substr = ':'
+//Result = '12:34:56:78:90:AB' Spacing=2, AtBegin=False, AtEnd=False
+//Result = ':12:34:56:78:90:AB:' Spacing=2, AtBegin=True, AtEnd=True
+  i := 1;
+  while i < Length(src) - Spacing do begin
+    If AtBegin and (i = 1) then
+      Insert(substr, src, 0);
+    Inc(i, Spacing);
+    Insert(substr, src, i);
+    Inc(i, Length(substr));
+  end;
+  if AtEnd then
+    src := src + substr;
+  Result := src;
 end;
 
 function IEEE754ByteToFloat(b: array of byte): Single;
@@ -507,6 +580,16 @@ var arr: array [0..3] of byte absolute Result;
 begin
   //Move(b, arr, 4);
   arr := b;
+end;
+
+function SubBytes(srcBytes: array of byte; StartPos, Len: Integer
+  ): TBytes;
+var i: Integer;
+begin
+  SetLength(Result, Len);
+  for i := StartPos to (StartPos + len-1) do begin
+    Result[i-StartPos] := srcBytes[i-1];
+  end;
 end;
 
 {$ifndef windows}
@@ -558,6 +641,7 @@ begin
 end;
 
 {$else}
+
 function EnumerateComport(ShowFriendlyName: Boolean): String;
 var
   reg  : TRegistry;
@@ -646,6 +730,44 @@ end;
 {$endif}
 
 
+function CRC_LINBusClassic(data: array of byte; Len: Integer): TBytes;
+var i,start, crc: word;
+begin
+  if Len < 3 then
+    Exit;
+  SetLength(Result, 1);
+  if data[0] = $55 then
+    start := 2
+  else
+    start := 0;
+  crc := data[start]; //get first data byte
+  for i := Succ(Start) to Len -2 do begin
+    crc := crc + data[i];
+    if crc > $FF then
+      crc := crc - $FF;
+  end;
+  Result[0] := not crc;
+end;
+
+function CRC_LINBusEnhance(data: array of byte; Len: Integer): TBytes;
+var i,start, crc: word;
+begin
+  if Len < 3 then
+    Exit;
+  SetLength(Result, 1);
+  if data[0] = $55 then
+    start := 1
+  else
+    start := 0;
+  crc := data[start]; //get first data byte
+  for i := Succ(Start) to Len -2 do begin
+    crc := crc + data[i];
+    if crc > $FF then
+      crc := crc - $FF;
+  end;
+  Result[0] := not crc;
+end;
+
 function CRC16_Modbus(data: array of byte; Len: Integer): TBytes;
 var i,j, crc: word;
 begin
@@ -701,29 +823,55 @@ begin
 end;
 
 { TSyncReadTimer }
-
-procedure TSyncReadTimer.SetInterval(AValue: cardinal);
+{$ifdef windows}
+procedure TSyncReadTimer.SetInterval(AValue: int64);
 begin
   if FInterval = AValue then Exit;
   FInterval := AValue;
 end;
 
+{$else}
+procedure TSyncReadTimer.SetInterval(AValue: cardinal);
+begin
+  if FInterval = AValue then Exit;
+  FInterval := AValue;
+end;
+{$endif}
+
 procedure TSyncReadTimer.Execute;
+{$ifdef windows}
+var aTick, usec: int64;
+{$endif}
 begin
   while not Terminated do begin
     if not FEnded then begin
+      {$ifdef windows}
+      QueryPerformanceCounter(aTick);
+      aTick := aTick * 1000000; // convert to microseconds
+      usec := aTick div FQPFreq;
+      if usec > FuSec then begin
+        FEnded := True;
+        SendSignal;
+      end;
+      {$else}
       if GetTickCount64 > FTick then begin
         FEnded := True;
         SendSignal;
       end;
+      {$endif}
     end;
   end;
 end;
 
 constructor TSyncReadTimer.Create(OSSerial: TCustomOSSerial);
 begin
-  FOSSerial := OSSerial;
+  {$ifdef Windows}
+  QueryPerformanceFrequency(FQPFreq);
+  FuSec := 0;
+  {$else}
   FTick := 0;
+  {$endif}
+  FOSSerial := OSSerial;
   FEnded := True;
   FreeOnTerminate := True;
   Inherited Create(False);
@@ -741,7 +889,14 @@ end;
 
 procedure TSyncReadTimer.Restart;
 begin
+  {$ifdef windows}
+  QueryPerformanceCounter(FTick);
+  FTick := FTick * 1000000; //convert to microseconds
+  FuSec := FTick div FQPFreq; //microseconds per tick
+  FuSec := FuSec + FInterval;
+  {$else}
   FTick := GetTickCount64 + FInterval;
+  {$endif}
   FEnded := False;
 end;
 
@@ -966,11 +1121,12 @@ begin
         end;
       //end;
     end else begin
+      FSyncReadTimer.Stop;
       LastErr := GetLastError;
       if (LastErr = ERROR_IO_PENDING) then begin
         event := WaitForMultipleObjects(2, @Events, False, INFINITE);
         if event = WAIT_OBJECT_0 then begin //got incoming data
-          FSyncReadTimer.Stop;
+          //FSyncReadTimer.Stop;
           if (evMask and EV_RXCHAR <> 0) then begin
             Pending := True;
             while Pending do begin
@@ -1015,9 +1171,9 @@ begin
             //
             //evMask := 0;
             //FOSSerial.DoSetCommMask;
-          end else if event = WAIT_OBJECT_0 + 1 then begin //terminate thread signal
-            break;
           end;
+        end else if event = WAIT_OBJECT_0 + 1 then begin //terminate thread signal
+          break;
         end;
       end else begin
         //ERROR_INVALID_HANDLE
@@ -1093,7 +1249,11 @@ constructor TOSSerialRxThread.Create(OSSerial: TCustomOSSerial);
 begin
   FOSSerial := OSSerial;
   FSyncReadTimer := TSyncReadTimer.Create(OSSerial);
-  FSyncReadTimer.SetInterval(1);
+  {$ifdef windows}
+  FSyncReadTimer.SetInterval(1); //default to 1 microsec
+  {$else}
+  FSyncReadTimer.SetInterval(1); //default to 1 msec
+  {$endif}
   FSyncReadTimer.FreeOnTerminate := True;
   {$ifndef windows}
 
@@ -1173,6 +1333,11 @@ begin
   //else
   //  s := FPortName;
   Result := FPort;
+end;
+
+function TCustomOSSerial.GetSyncReadStatus: Boolean;
+begin
+  Result := not FCommThread.FSyncReadTimer.Ended;
 end;
 
 function TCustomOSSerial.ProtocolCount(s: String): Integer;
@@ -1430,9 +1595,13 @@ begin
         {$endif}
         //bTempLen := PeekBuf(bTemp);
         //sleep(1); //needed give more time to Rx Thread
-        if Assigned(OnReceive) then begin
-          //OnReceive(False);
-          OnReceive(Self);
+        if not FSkipOnReceive then begin
+          if Assigned(OnReceive) then begin
+            //OnReceive(False);
+            OnReceive(Self);
+          end;
+        end else begin
+          FSkipOnReceive := False;
         end;
         //if Assigned(FOnDebug) then begin
           //if not (csDesigning in ComponentState) then begin
@@ -1532,8 +1701,10 @@ begin
   //if csDesigning in ComponentState then Exit;
   if FEnabled then begin //Open port
     //InitCriticalSection(FCS);
+    FSkipOnReceive := False;
     ResetCounters(True, True);
     ClearBuffer(True, True);
+    SetLength(FRxBuffer, FRxBufSize);
     Try
       FHndComm := CreateFile(PChar('\\.\' + FPort),
                              GENERIC_READ or GENERIC_WRITE,
@@ -1598,14 +1769,22 @@ begin
       FillChar(FSyncRead, SizeOf(TOVERLAPPED), 0);
       //FSyncRead.hEvent := CreateEvent(nil, False, False, nil); //autoreset
       FSyncRead.hEvent := CreateEvent(nil, True, False, nil); //manual reset
+      ResetEvent(FSyncRead.hEvent);
       {$endif}
       FCommThread := TOSSerialRxThread.Create(Self);
       FCommThread.FreeOnTerminate := True;
       FCommThread.OnCommEvent := @DoRxThreadCommEvent;
       FCommThread.Suspended := False;
 
-      EscapeCommFunction(FHndComm, SETRTS);
+      //EscapeCommFunction(FHndComm, SETRTS);
       EscapeCommFunction(FHndComm, CLRRTS);
+
+      //EscapeCommFunction(FHndComm, SETDTR);
+      EscapeCommFunction(FHndComm, CLRDTR);
+
+      //EscapeCommFunction(FHndComm, SETRTS);
+      //EscapeCommFunction(FHndComm, SETDTR);
+      SyncRead(1); //needed to fix a bug with first syncread() not receiving data but letting data slip to OnReceive event.
     except
       if FHndComm <> INVALID_HANDLE_VALUE then
         CloseHandle(FHndComm);
@@ -1817,10 +1996,11 @@ begin
   if not FEnabled then
     raise Exception.Create('Port not open.');
 {$IFDEF WINDOWS}
-  ResetEvent(FSyncRead.hEvent);
+  //ResetEvent(FSyncRead.hEvent);
 {$ELSE}
   RTLeventResetEvent(FSyncRead);
 {$ENDIF}
+  FSkipOnReceive := True;
   SavedEvent := OnReceive;
   OnReceive := nil;
   Result := False;
@@ -1862,6 +2042,7 @@ var event: dword;
     r: cardinal;
 {$ENDIF}
 begin
+  FSkipOnReceive := True;
   Result := False;
   if Finished then begin
     LastMode := ReceiveMode;
@@ -1932,7 +2113,7 @@ begin
   FTimeouts := TSerialTimeouts.Create;
   FRxBufSize := 1024;
   FTxBufSize := 1024;
-  SetLength(FRxBuffer, 1024);
+  //SetLength(FRxBuffer, FRxBufSize);
   //SetLength(FProtocolBuffer, 0);
   FRxLength := 0;
   FNodeList := TList.Create;
@@ -2073,6 +2254,15 @@ begin
   Result := ReadString;
 end;
 
+function TCustomOSSerial.ReadBufAsHexStr: String;
+var len: Integer;
+    b: TBytes;
+begin
+  len := ReadBuf(b);
+  Result := BytesToHexStr(b, Length(b), True);
+  //Result := TEncoding.Ansi.GetString(b);
+end;
+
 function TCustomOSSerial.PeekBuf(out Buf): Integer;
 begin
   SetLength(TBytes(Buf), FRxLength);
@@ -2111,6 +2301,7 @@ var byteWrote, ignore: dword;
     Ovlap: TOVERLAPPED;
     b: TBytes;
     Succeed: Boolean;
+    i: Integer;
 begin
   ResetEvent(FSyncRead.hEvent);
   if not FEnabled then begin
@@ -2146,7 +2337,12 @@ begin
   //until
   //  WriteQueue = 0;
   CloseHandle(Ovlap.hEvent);
-  Sleep(1);
+  //Sleep(1);
+  i := 10000;
+  while i > 0 do begin
+    Dec(i);
+    sleep(0);
+  end;
 end;
 
 procedure TCustomOSSerial.Write(const Buf; len: Integer);
@@ -2160,10 +2356,12 @@ procedure TCustomOSSerial.WriteString(S: String; EscapeChar: Char = #0);
 begin
   if Length(s) = 0 then Exit;
   if EscapeChar <> #0 then begin
-    if (Pos(EscapeChar +'n', s) + 1) <> (Pos(EscapeChar+EscapeChar, s)) then
+    if (Pos(EscapeChar +'n', s) + 1) <> (Pos(EscapeChar+EscapeChar, s)) then //new line
       s := ReplaceText(s, EscapeChar+'n', #10);
-    if (Pos(EscapeChar+'r', s) + 1) <> (Pos(EscapeChar+EscapeChar, s)) then
+    if (Pos(EscapeChar+'r', s) + 1) <> (Pos(EscapeChar+EscapeChar, s)) then //return
       s := ReplaceText(s, EscapeChar+'r', #13);
+    if (Pos(EscapeChar+'t', s) + 1) <> (Pos(EscapeChar+EscapeChar, s)) then //tab
+      s := ReplaceText(s, EscapeChar+'t', #9);
   end;
   WriteBuf(s[1], Length(s));
 end;
@@ -2178,11 +2376,18 @@ begin
   WriteString(s);
 end;
 
-procedure TCustomOSSerial.WriteHexStr(S: String);
+function TCustomOSSerial.WriteStrAsHex(S: String): String;
 var b: TBytes;
+    cs: TBytes;
 begin
+  Result := '';
   b := HexStrToBytes(S);
+  if Assigned(CRC_Function) then begin
+    cs := CRC_Function(b, Length(b));
+    b := b + cs;
+  end;
   WriteBuf(b[0], Length(b));
+  Result := BytesToHexStr(b, Length(b), True);
 end;
 
 {$ifndef windows}
@@ -2206,6 +2411,15 @@ begin
     FRxLength := 0;
   end else begin
     if RxBuffer then begin
+      //EscapeCommFunction(FHndComm, SETRTS);
+      //EscapeCommFunction(FHndComm, CLRRTS);
+      //
+      //EscapeCommFunction(FHndComm, SETDTR);
+      //EscapeCommFunction(FHndComm, CLRDTR);
+
+      //EscapeCommFunction(FHndComm, CLRRTS);
+      //EscapeCommFunction(FHndComm, CLRDTR);
+
       PurgeComm(FHndComm, PURGE_RXABORT or PURGE_RXCLEAR);
       FRxLength := 0;
     end;

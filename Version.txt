@@ -1,3 +1,16 @@
+ver 0.5.5 11-8-2023
+- Optimized SyncRead() for speed.
+- Added property SyncReadInProgress to indicate if a SyncRead() is taking place (True).
+
+ver 0.5.4 17-5-2023
+- Optimized WriteBuf() function to fix a bug in SyncRead() and OnReceived event firing at the same time.
+- Upscale SyncRead() timer from milliseconds to microseconds in MS Windows for better receiving response.
+
+ver 0.5.3 15-5-2023
+- Added checksum function which auto insert checksum byte(s) in WriteHexStr(), and full send string returned.
+- Overcome a bug which caused first time SyncRead() after port opened not able to receive data, but the data went to OnReceive event.
+- Added function ReadBufAsHexStr() which directly reads a hex into hex string.
+
 ver 0.5.2 24-6-2022
 - Added support for setting serial port params (Parity, Stopbits) on LINUX.
 - Added WriteHexStr(HexStr: String) which auto converts 'OF A1' to $OFA1 and write to com port
