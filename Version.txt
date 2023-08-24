@@ -1,3 +1,7 @@
+ver 0.5.6 23-8-2023
+- A workaround for a weird error where temp probe auto tx caused receive error of ERROR_INVALID_PARAMETER which i do not know why.
+
+
 ver 0.5.5 11-8-2023
 - Optimized SyncRead() for speed.
 - Added property SyncReadInProgress to indicate if a SyncRead() is taking place (True).

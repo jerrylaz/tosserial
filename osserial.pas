@@ -1,5 +1,5 @@
 {******************************************************************************}
-{  version: 0.5.4                                                              }
+{  version: 0.5.6                                                              }
 {  date: 20-6-2018                                                             }
 {  Type: Serial port component (OpenScada Library - TOSSerial)                 }
 {  Author: jerry_my@hotmail.com                                                }
@@ -21,7 +21,7 @@ uses
   Classes, SysUtils, LResources, Forms, StrUtils;
 
 const
-  ver = '0.5.4'; //13-6-2022 Windows
+  ver = '0.5.6'; //13-6-2022 Windows
 
 
 
@@ -1175,6 +1175,9 @@ begin
         end else if event = WAIT_OBJECT_0 + 1 then begin //terminate thread signal
           break;
         end;
+      end else if (LastErr = ERROR_INVALID_PARAMETER) then begin
+        ProcessEvRxChar(@Ovlap);
+        ResetEvent(Ovlap.hEvent);
       end else begin
         //ERROR_INVALID_HANDLE
         //raise Exception.Create(Format('Wait failed with error: %d', [LastErr]));
@@ -1694,6 +1697,7 @@ var Succeed: Boolean;
     aDCB: TDCB;
     comTimeout: TCOMMTIMEOUTS;
     ErrorCode: dword;
+    evnt: TNotifyEvent;
 begin
   if FEnabled=AValue then Exit;
   FEnabled:=AValue;
@@ -1735,7 +1739,7 @@ begin
         //           SysErrorMessage(ErrorCode), mtError, [mbOk], 0);
         //Exit;
       end;
-      aDCB.BaudRate := Baudrate;
+      aDCB.BaudRate := Integer(Baudrate);
       aDCB.Parity := Integer(Parity);
       aDCB.StopBits := Integer(StopBits);
       aDCB.ByteSize := DataBits;
@@ -1804,6 +1808,8 @@ begin
   end else begin  //Close port
     //if FHndComm <> INVALID_HANDLE_VALUE then
     //  CloseHandle(FHndComm);
+    evnt := FOnReceive;
+    FOnReceive := nil;
     CloseHandle(FSyncRead.hEvent);
     if Assigned(FCommThread) then begin
       SetEvent(FCommThread.FEvEndProcess.hEvent);
@@ -1813,6 +1819,7 @@ begin
       Sleep(200);
     end;
     ClearBuffer(True, True);
+    FOnReceive := evnt;
     //DoneCriticalsection(FCS);
   end;
 end;
@@ -1851,6 +1858,7 @@ procedure TCustomOSSerial.SetPortName(AValue: String);
 var s: String;
     i,j: Integer;
 begin
+  AValue := ReplaceText(AValue, '\\.\', '');
   if Length(AValue) >= 5 then begin
     s := AValue;
     i :=  Pos('(', s);
