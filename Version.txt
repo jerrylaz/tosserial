@@ -1,4 +1,10 @@
+ver 0.5.7 24-8-2023
+[Linux]
+- Fixed a bug where FRxBuffer is not initialize, so readbuf and store to it will fail.
+
+
 ver 0.5.6 23-8-2023
+[Windows]
 - A workaround for a weird error where temp probe auto tx caused receive error of ERROR_INVALID_PARAMETER which i do not know why.
 
 

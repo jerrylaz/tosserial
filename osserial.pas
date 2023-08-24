@@ -1,5 +1,5 @@
 {******************************************************************************}
-{  version: 0.5.6                                                              }
+{  version: 0.5.7                                                              }
 {  date: 20-6-2018                                                             }
 {  Type: Serial port component (OpenScada Library - TOSSerial)                 }
 {  Author: jerry_my@hotmail.com                                                }
@@ -21,7 +21,7 @@ uses
   Classes, SysUtils, LResources, Forms, StrUtils;
 
 const
-  ver = '0.5.6'; //13-6-2022 Windows
+  ver = '0.5.7'; //13-6-2022 Windows
 
 
 
@@ -1667,6 +1667,7 @@ begin
   if (csDesigning in ComponentState) then Exit;
   if FEnabled then begin //Open port
     InitCriticalSection(FCS);
+    SetLength(FRxBuffer, FRxBufSize);
     FCommThread := TOSSerialRxThread.Create(Self);
     FCommThread.FreeOnTerminate := True;
     FCommThread.OnCommEvent := @DoRxThreadCommEvent;
@@ -1687,6 +1688,7 @@ begin
     FRxLength := 0;
     Sleep(200);
     SerClose(FHndComm);
+    SetLength(FRxBuffer, 0);
     DoneCriticalsection(FCS);
   end;
 end;
