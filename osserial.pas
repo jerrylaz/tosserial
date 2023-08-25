@@ -1,5 +1,5 @@
 {******************************************************************************}
-{  version: 0.5.7                                                              }
+{  version: 0.5.8                                                              }
 {  date: 20-6-2018                                                             }
 {  Type: Serial port component (OpenScada Library - TOSSerial)                 }
 {  Author: jerry_my@hotmail.com                                                }
@@ -21,7 +21,7 @@ uses
   Classes, SysUtils, LResources, Forms, StrUtils;
 
 const
-  ver = '0.5.7'; //13-6-2022 Windows
+  ver = '0.5.8'; //13-6-2022 Windows
 
 
 
@@ -910,7 +910,7 @@ end;
 {$ELSE}
 procedure TSyncReadTimer.SendSignal;
 begin
-
+  RTLeventSetEvent(FOSSerial.FSyncRead);
 end;
 
 {$ENDIF}
@@ -1060,8 +1060,11 @@ begin
       //if (evMask and EV_RXCHAR <> 0) then begin
         //OK := GetOverlappedResult(FOSSerial.FHndComm, Ovlap, bytesRx, False);
         //if OK or (GetLastError = ERROR_IO_PENDING) then begin
-      if events[0].data.fd = FOSSerial.FHndComm then
-          ProcessEvRxChar;
+      if events[0].data.fd = FOSSerial.FHndComm then begin
+        FSyncReadTimer.Stop;
+        ProcessEvRxChar;
+        FSyncReadTimer.Restart;
+      end;
 
       //else if (evMask and EV_RXFLAG <> 0) then
       //else if (evMask and EV_TXEMPTY <> 0) then
@@ -1255,7 +1258,7 @@ begin
   {$ifdef windows}
   FSyncReadTimer.SetInterval(1); //default to 1 microsec
   {$else}
-  FSyncReadTimer.SetInterval(1); //default to 1 msec
+  FSyncReadTimer.SetInterval(20); //default to 20 msec
   {$endif}
   FSyncReadTimer.FreeOnTerminate := True;
   {$ifndef windows}

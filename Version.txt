@@ -1,3 +1,7 @@
+ver 0.5.8 25-8-2023
+[Linux]
+- Fixed a bug where SyncRead() is not working correctly.
+
 ver 0.5.7 24-8-2023
 [Linux]
 - Fixed a bug where FRxBuffer is not initialize, so readbuf and store to it will fail.
